@@ -1,0 +1,117 @@
+package com.university.course_managment.service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Service;
+
+import com.university.course_managment.dto.DashboardStats;
+import com.university.course_managment.entity.Course;
+import com.university.course_managment.entity.Result;
+import com.university.course_managment.entity.Student;
+import com.university.course_managment.entity.User;
+import com.university.course_managment.exception.ResourceNotFoundException;
+import com.university.course_managment.repository.CourseRepository;
+import com.university.course_managment.repository.ResultRepository;
+import com.university.course_managment.repository.StudentRepository;
+import com.university.course_managment.repository.UserRepository;
+
+@Service
+public class DashboardService {
+    
+    private final UserRepository userRepository;
+    private final CourseRepository courseRepository;
+    private final StudentRepository studentRepository;
+    private final ResultRepository resultRepository;
+
+    public DashboardService(UserRepository userRepository, 
+                           CourseRepository courseRepository,
+                           StudentRepository studentRepository, 
+                           ResultRepository resultRepository) {
+        this.userRepository = userRepository;
+        this.courseRepository = courseRepository;
+        this.studentRepository = studentRepository;
+        this.resultRepository = resultRepository;
+    }
+    
+    public DashboardStats getAdminDashboardStats() {
+        DashboardStats stats = new DashboardStats();
+        
+        stats.setTotalStudents(studentRepository.count());
+        stats.setTotalCourses(courseRepository.count());
+        
+        // Count instructors manually
+        long instructorCount = userRepository.findAll().stream()
+                .filter(user -> user.getRole() == User.Role.INSTRUCTOR)
+                .count();
+        stats.setTotalInstructors(instructorCount);
+        
+        stats.setTotalResults(resultRepository.count());
+        
+        // Additional statistics
+        Map<String, Object> additionalStats = new HashMap<>();
+        additionalStats.put("activeCourses", courseRepository.findAll().size());
+        additionalStats.put("averageEnrollmentPerCourse", calculateAverageEnrollment());
+        stats.setAdditionalStats(additionalStats);
+        
+        return stats;
+    }
+    
+    public DashboardStats getStudentDashboardStats() {
+        User currentUser = (User) SecurityContextHolder.getContext()
+                .getAuthentication().getPrincipal();
+        
+        Student student = studentRepository.findByUserId(currentUser.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Student not found"));
+        
+        DashboardStats stats = new DashboardStats();
+        stats.setEnrolledCourses(student.getCourses().size());
+        
+        // Get results for this student
+        List<Result> results = resultRepository.findByStudent(student);
+        stats.setCompletedCourses(results.size());
+        
+        // Calculate GPA
+        if (!results.isEmpty()) {
+            double averageScore = results.stream()
+                    .mapToDouble(Result::getTotalScore)
+                    .average()
+                    .orElse(0.0);
+            // Convert to 4.0 scale (assuming 100 point scale)
+            stats.setGpa(averageScore / 25.0);
+        } else {
+            stats.setGpa(0.0);
+        }
+        
+        return stats;
+    }
+    
+    public DashboardStats getInstructorDashboardStats() {
+        User currentUser = (User) SecurityContextHolder.getContext()
+                .getAuthentication().getPrincipal();
+        
+        DashboardStats stats = new DashboardStats();
+        List<Course> courses = courseRepository.findByInstructor(currentUser);
+        
+        stats.setTotalCourses((long) courses.size());
+        
+        long totalStudents = courses.stream()
+                .mapToLong(course -> course.getStudents().size())
+                .sum();
+        stats.setTotalStudents(totalStudents);
+        
+        return stats;
+    }
+    
+    private double calculateAverageEnrollment() {
+        List<Course> allCourses = courseRepository.findAll();
+        if (allCourses.isEmpty()) return 0.0;
+        
+        return allCourses.stream()
+                .mapToInt(course -> course.getStudents().size())
+                .average()
+                .orElse(0.0);
+    }
+}
